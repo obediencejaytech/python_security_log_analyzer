@@ -2,8 +2,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from security_analyzer import analyze_log, get_risk_level, generate_report
-
+from security_analyzer import (
+    analyze_log,
+    get_risk_level,
+    generate_report,
+    detect_rapid_failed_logins,
+)
 
 class TestSecurityAnalyzer(unittest.TestCase):
 
@@ -73,5 +77,65 @@ class TestSecurityAnalyzer(unittest.TestCase):
         self.assertIn("HIGH RISK", report)
 
 
+    def test_rapid_failed_logins_within_five_minutes(self):
+        log_content = (
+            "2026-10-16 08:00:00 | Alice | LOGIN_FAILED\n"
+            "2026-10-16 08:02:00 | Alice | LOGIN_FAILED\n"
+            "2026-10-16 08:04:00 | Alice | LOGIN_FAILED\n"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "rapid.log"
+            log_path.write_text(log_content, encoding="utf-8")
+
+            alerts = detect_rapid_failed_logins(log_path)
+
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0][0], "Alice")
+        self.assertEqual(alerts[0][1], 3)
+
+    def test_failed_logins_outside_five_minutes(self):
+        log_content = (
+            "2026-10-16 08:00:00 | Alice | LOGIN_FAILED\n"
+            "2026-10-16 08:03:00 | Alice | LOGIN_FAILED\n"
+            "2026-10-16 08:06:00 | Alice | LOGIN_FAILED\n"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "spread.log"
+            log_path.write_text(log_content, encoding="utf-8")
+
+            alerts = detect_rapid_failed_logins(log_path)
+
+        self.assertEqual(alerts, [])
+
+    def test_fewer_than_three_failed_logins(self):
+        log_content = (
+            "2026-10-16 08:00:00 | Alice | LOGIN_FAILED\n"
+            "2026-10-16 08:01:00 | Alice | LOGIN_FAILED\n"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "few.log"
+            log_path.write_text(log_content, encoding="utf-8")
+
+            alerts = detect_rapid_failed_logins(log_path)
+
+        self.assertEqual(alerts, [])
+
+    def test_invalid_timestamp_is_ignored_by_detector(self):
+        log_content = (
+            "not-a-timestamp | Alice | LOGIN_FAILED\n"
+            "2026-10-16 08:00:00 | Alice | LOGIN_FAILED\n"
+            "2026-10-16 08:01:00 | Alice | LOGIN_FAILED\n"
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_path = Path(temp_dir) / "invalid.log"
+            log_path.write_text(log_content, encoding="utf-8")
+
+            alerts = detect_rapid_failed_logins(log_path)
+
+        self.assertEqual(alerts, [])
 if __name__ == "__main__":
     unittest.main()

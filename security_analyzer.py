@@ -61,6 +61,73 @@ def analyze_log(file_path):
 
     return users, total_events, malformed_lines
 
+def detect_rapid_failed_logins(file_path):
+    from datetime import datetime, timedelta
+
+    failed_attempts = defaultdict(list)
+    alerts = []
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as log_file:
+            for line in log_file:
+                parts = line.strip().split("|")
+
+                if len(parts) != 3:
+                    continue
+
+                timestamp_text, username, event = [
+                    part.strip() for part in parts
+                ]
+
+                if not username or event != "LOGIN_FAILED":
+                    continue
+
+                try:
+                    timestamp = datetime.strptime(
+                        timestamp_text,
+                        "%Y-%m-%d %H:%M:%S",
+                    )
+                except ValueError:
+                    continue
+
+                failed_attempts[username].append(timestamp)
+
+    except (FileNotFoundError, OSError) as error:
+        print(f"ERROR: Could not read log file: {error}")
+        return []
+
+    window = timedelta(minutes=5)
+
+    for username, timestamps in failed_attempts.items():
+        timestamps.sort()
+
+        left = 0
+        best_count = 0
+        best_start = None
+        best_end = None
+
+        for right, timestamp in enumerate(timestamps):
+            while timestamp - timestamps[left] > window:
+                left += 1
+
+            count = right - left + 1
+
+            if count > best_count:
+                best_count = count
+                best_start = timestamps[left]
+                best_end = timestamp
+
+        if best_count >= FAILED_LOGIN_THRESHOLD:
+            alerts.append(
+                (
+                    username,
+                    best_count,
+                    best_start,
+                    best_end,
+                )
+            )
+
+    return alerts
 
 def get_risk_level(failed_logins):
     if failed_logins >= FAILED_LOGIN_THRESHOLD:
@@ -70,7 +137,6 @@ def get_risk_level(failed_logins):
         return "MEDIUM RISK"
 
     return "LOW RISK"
-
 
 def generate_report(users, total_events, malformed_lines):
     report_lines = [
@@ -122,7 +188,23 @@ def generate_report(users, total_events, malformed_lines):
         get_risk_level(data["failed"]) == "HIGH RISK"
         for data in users.values()
     )
+    rapid_alerts = detect_rapid_failed_logins(LOG_FILE)
 
+    report_lines.extend([
+        "",
+        "=== RAPID FAILED-LOGIN ALERTS ===",
+    ])
+
+    if rapid_alerts:
+        for username, count, start, end in rapid_alerts:
+            report_lines.append(
+                f"ALERT: {username} had {count} failed login attempts "
+                f"within five minutes, from {start} to {end}."
+            )
+    else:
+        report_lines.append(
+            "No rapid failed-login patterns detected."
+        )
     report_lines.extend([
         "",
         "=== RISK SUMMARY ===",
